@@ -1,0 +1,111 @@
+pipeline {
+    agent { label 'blue' }
+
+    stages {
+        stage('Pre Cleanup') {
+            steps {
+                script {
+                    try {
+                        // Delete any existing containers and images
+                        sh 'docker rm -f $(docker ps -a -q)'
+                        sh 'docker rmi -f my-maven-web-app'
+                    } catch (Exception ex) {
+                        echo "No existing containers or images found to clean up."
+                    }
+                }
+            }
+        }
+
+        stage('Checkout') {
+            steps {
+                script {
+                    try {
+                        // Delete the existing mavenCICD directory
+                        sh 'rm -rf mavenCICD'
+
+                        // Checkout the repository using git
+                        def cloneResult = sh(script: 'git clone https://github.com/manchal-02/mavenCICD.git/', returnStatus: true, returnStdout: true)
+                        if (cloneResult == 0) {
+                            echo "Git clone successful."
+                        } else {
+                            error("Git clone failed with exit code ${cloneResult}.")
+                        }
+
+                        // Navigate to the directory with Dockerfile
+                        dir('mavenCICD') {
+                            // Proceed with the rest of the pipeline steps
+                            script {
+                                // Build the Docker image
+                                sh 'docker build -t my-maven-web-app .'
+                                
+                                // Test the Docker image (you might need to add your test commands here)
+                            }
+                        }
+                    } catch (Exception ex) {
+                        currentBuild.result = 'FAILURE'
+                        error("Error during checkout or build: ${ex.message}")
+                    }
+                }
+            }
+        }
+
+        stage('Run Container for Testing') {
+            steps {
+                script {
+                    try {
+                        // Run the Docker container for testing
+                        sh 'docker run -d -p 8080:8080 my-maven-web-app'
+                    } catch (Exception ex) {
+                        currentBuild.result = 'FAILURE'
+                        error("Error during running container: ${ex.message}")
+                    }
+                }
+            }
+        }
+
+        stage('Approval to Push and Delete') {
+            steps {
+                script {
+                    def userInput = input(
+                        id: 'pushApproval',
+                        message: 'Does the container run successfully and do you want to push the image?',
+                        parameters: [
+                            booleanParam(
+                                defaultValue: true,
+                                description: 'Push image',
+                                name: 'PUSH_IMAGE'
+                            )
+                        ]
+                    )
+
+                    if (userInput.PUSH_IMAGE) {
+                        try {
+                            // Tag the image for Docker Hub
+                            sh 'docker tag my-maven-web-app manchal/my-maven-web-app:v1'
+
+                            // Push the tagged image to Docker Hub
+                            sh 'docker push manchal/my-maven-web-app:v1'
+                        } catch (Exception ex) {
+                            error("Error during pushing image: ${ex.message}")
+                        }
+
+                        // Delete the local image and container
+                        try {
+                            sh 'docker rm -f $(docker ps -a -q)'
+                            sh 'docker rmi -f my-maven-web-app'
+                        } catch (Exception ex) {
+                            error("Error during cleanup: ${ex.message}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            // Delete the cloned repository directory
+            sh 'rm -rf mavenCICD'
+        }
+    }
+}
